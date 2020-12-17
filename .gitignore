@@ -1,2 +1,3 @@
 /cf
-Data/glove.840B.300d.txt
+/classification/.vector_cache
+/classification/snapshot
