@@ -1,3 +1,4 @@
 /cf
 /classification/.vector_cache
 /classification/snapshot
+/classification/wandb

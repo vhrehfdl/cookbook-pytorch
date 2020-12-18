@@ -4,9 +4,10 @@ import spacy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from torchtext import data
 from torchtext.data import TabularDataset
-
+import argparse
 
 def load_data(train_dir, test_dir):
     NLP = spacy.load('en_core_web_sm')
@@ -23,7 +24,7 @@ def load_data(train_dir, test_dir):
     return train_data, valid_data, test_data, TEXT, LABEL
 
 
-def data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
+def pre_processing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
     TEXT.build_vocab(train_data)
     LABEL.build_vocab(train_data)
 
@@ -53,7 +54,7 @@ def train(model, optimizer, train_iter, device):
     model.train()
     for b, batch in enumerate(train_iter):
         x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)  # 레이블 값을 0과 1로 변환
+        y.data.sub_(1)
         optimizer.zero_grad()
 
         logit = model(x)
@@ -65,10 +66,10 @@ def train(model, optimizer, train_iter, device):
 def evaluate(model, val_iter, device):
     model.eval()
     corrects, total_loss = 0, 0
-    print(val_iter)
+
     for batch in val_iter:
         x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)  # 레이블 값을 0과 1로 변환
+        y.data.sub_(1)
         logit = model(x)
         loss = F.cross_entropy(logit, y, reduction='sum')
         total_loss += loss.item()
@@ -80,7 +81,6 @@ def evaluate(model, val_iter, device):
 
 
 def save_model(best_val_loss, val_loss, model, model_dir):
-    # 검증 오차가 가장 적은 최적의 모델을 저장
     if not best_val_loss or val_loss < best_val_loss:
         if not os.path.isdir("snapshot"):
             os.makedirs("snapshot")
@@ -89,39 +89,61 @@ def save_model(best_val_loss, val_loss, model, model_dir):
 
 
 def main():
-    # 하이퍼파라미터
+
+    # Hyper parameter
     batch_size = 64
     lr = 0.001
-    EPOCHS = 30
+    EPOCHS = 10
     n_classes = 2
     embedding_dim = 300
     hidden_dim = 32
 
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-
+    # Directory
     base_dir = ".."
     train_dir = base_dir + "/Data/binary_train_data.csv"
     test_dir = base_dir + "/Data/binary_test_data.csv"
     model_dir = "snapshot/text_classification.pt"
 
-    train_data, valid_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
-    train_iter, val_iter, test_iter, TEXT, LABEL = data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size)
+    wandb.init(project="pytorch_cookbook", config={"dataset": "quora insurance", "type": "baseline"});
+
+    wandb.config.epochs = EPOCHS
+    wandb.config.batch_size = batch_size
+    wandb.config.learning_rate = lr
+    wandb.config.embedding_dim = embedding_dim
+
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+
+    print("1. Load data")
+    train_data, val_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
+
+    print("2. Pre processing")
+    train_iter, val_iter, test_iter, TEXT, LABEL = pre_processing(train_data, val_data, test_data, TEXT, LABEL, device, batch_size)
 
     vocab_size = len(TEXT.vocab)
+
+    print("3. Build model")
     model = BasicModel(1, hidden_dim, vocab_size, embedding_dim, n_classes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    wandb.watch(model)
 
+    print("4. Train")
     best_val_loss = None
     for e in range(1, EPOCHS + 1):
         train(model, optimizer, train_iter, device)
         val_loss, val_accuracy = evaluate(model, val_iter, device)
         print("[Epoch: %d] val loss : %5.2f | val accuracy : %5.2f" % (e, val_loss, val_accuracy))
         save_model(best_val_loss, val_loss, model, model_dir)
+        wandb.log({
+            "epoch": e,
+            "val_accuracy": val_accuracy,
+            "val_loss": val_loss
+        })
 
     model.load_state_dict(torch.load(model_dir))
     test_loss, test_acc = evaluate(model, test_iter, device)
     print('테스트 오차: %5.2f | 테스트 정확도: %5.2f' % (test_loss, test_acc))
+
 
 
 if __name__ == '__main__':
