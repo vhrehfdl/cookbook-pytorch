@@ -14,43 +14,24 @@ def load_data(train_dir, test_dir):
     tokenizer = lambda sent: [x.text for x in NLP.tokenizer(sent) if x.text != " "]
 
     TEXT = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
-    LABEL = data.Field(sequential=False, batch_first=True)
+    LABEL = data.LabelField()
 
-    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('turn3', TEXT), ('label', LABEL)])
-    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('turn3', TEXT), ('label', LABEL)])
+    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('turn1', TEXT), ('turn2', TEXT), ('turn3', TEXT), ('label', LABEL)])
+    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('turn1', TEXT), ('turn2', TEXT), ('turn3', TEXT), ('label', LABEL)])
 
     train_data, valid_data = train_data.split(split_ratio=0.1)
 
     return train_data, valid_data, test_data, TEXT, LABEL
 
 
-def data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
-    print(vars(TEXT))
+def pre_processing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
     TEXT.build_vocab(train_data, vectors=GloVe(name='6B', dim=300))
     LABEL.build_vocab(train_data)
 
-    train_iter, val_iter = data.BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device,
-                                                      sort_key=lambda x: len(x.text), sort_within_batch=False, repeat=False)
+    train_iter, val_iter = data.BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device, sort_key=lambda x: len(x.turn3), sort_within_batch=False, repeat=False)
     test_iter = data.Iterator(test_data, batch_size=batch_size, device=device, shuffle=False, sort=False, sort_within_batch=False)
 
     return train_iter, val_iter, test_iter, TEXT, LABEL
-
-
-class BasicModel(nn.Module):
-    def __init__(self, hidden_dim, n_vocab, embed_dim, n_classes, word_embeddings):
-        super(BasicModel, self).__init__()
-        self.embed = nn.Embedding(n_vocab, embed_dim)
-        self.embed.weight = nn.Parameter(word_embeddings, requires_grad=False)
-        self.linear = nn.Linear(embed_dim * 50, hidden_dim)
-        self.out = nn.Linear(hidden_dim, n_classes)
-
-    def forward(self, x):
-        x = self.embed(x)
-        x = x.view(x.size(0), -1)   # 2차원 Flatten
-        x = self.linear(x)
-        logit = self.out(x)
-
-        return logit
 
 
 class TextCNN(nn.Module):
@@ -107,10 +88,8 @@ class TextCNN(nn.Module):
 def train(model, optimizer, train_iter, device):
     model.train()
     for b, batch in enumerate(train_iter):
-        x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)  # 레이블 값을 0과 1로 변환
+        x, y = batch.turn3.to(device), batch.label.to(device)
         optimizer.zero_grad()
-
         logit = model(x)
         loss = F.cross_entropy(logit, y)
         loss.backward()
@@ -120,10 +99,8 @@ def train(model, optimizer, train_iter, device):
 def evaluate(model, val_iter, device):
     model.eval()
     corrects, total_loss = 0, 0
-    print(val_iter)
     for batch in val_iter:
-        x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)  # 레이블 값을 0과 1로 변환
+        x, y = batch.turn3.to(device), batch.label.to(device)
         logit = model(x)
         loss = F.cross_entropy(logit, y, reduction='sum')
         total_loss += loss.item()
@@ -146,8 +123,7 @@ def main():
     # 하이퍼파라미터
     batch_size = 64
     lr = 0.001
-    EPOCHS = 30
-    n_classes = 2
+    EPOCHS = 3
     embedding_dim = 300
     hidden_dim = 64
 
@@ -159,16 +135,20 @@ def main():
     test_dir = base_dir + "/Data/multi_test_data.csv"
     model_dir = "snapshot/text_classification.pt"
 
+    print("1. Load data")
     train_data, valid_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
-    train_iter, val_iter, test_iter, TEXT, LABEL = data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size)
 
+    print("2. Pre processing")
+    train_iter, val_iter, test_iter, TEXT, LABEL = pre_processing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size)
     vocab_size = len(TEXT.vocab)
+    n_classes = len(LABEL.vocab)
     word_embeddings = TEXT.vocab.vectors
 
-    # model = BasicModel(hidden_dim, vocab_size, embedding_dim, n_classes, word_embeddings).to(device)
+    print("3. Build model")
     model = TextCNN(hidden_dim, vocab_size, embedding_dim, n_classes, word_embeddings).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+    print("4. Train")
     best_val_loss = None
     for e in range(1, EPOCHS + 1):
         train(model, optimizer, train_iter, device)

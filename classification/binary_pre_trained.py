@@ -158,16 +158,20 @@ def main():
     test_dir = base_dir + "/Data/binary_test_data.csv"
     model_dir = "snapshot/txtclassification.pt"
 
+    print("1. Load data")
     train_data, valid_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
+
+    print("2. Pre processing")
     train_iter, val_iter, test_iter, TEXT, LABEL = data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size)
 
+    print("3. Build model")
     vocab_size = len(TEXT.vocab)
     word_embeddings = TEXT.vocab.vectors
 
-    # model = BasicModel(hidden_dim, vocab_size, embedding_dim, n_classes, word_embeddings).to(device)
     model = TextCNN(hidden_dim, vocab_size, embedding_dim, n_classes, word_embeddings).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+    print("4. Train")
     best_val_loss = None
     for e in range(1, EPOCHS + 1):
         train(model, optimizer, train_iter, device)

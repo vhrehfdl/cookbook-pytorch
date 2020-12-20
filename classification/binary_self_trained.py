@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import wandb
 from torchtext import data
 from torchtext.data import TabularDataset
-import argparse
+
 
 def load_data(train_dir, test_dir):
     NLP = spacy.load('en_core_web_sm')
