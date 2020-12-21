@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import *
 
 import numpy as np
@@ -28,7 +27,10 @@ from allennlp.nn.util import get_text_field_mask
 from allennlp.training.trainer import Trainer
 from overrides import overrides
 from scipy.special import expit
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import classification_report
 from tqdm import tqdm
+from sklearn.model_selection import train_test_split
 
 
 class Config(dict):
@@ -44,12 +46,11 @@ class Config(dict):
 
 config = Config(
     testing=True,
-    seed=1,
     batch_size=64,
     lr=3e-4,
     epochs=2,
     hidden_sz=64,
-    max_seq_len=100,  # necessary to limit memory usage
+    max_seq_len=300,
     max_vocab_size=100000,
 )
 
@@ -77,9 +78,7 @@ class LoadData(DatasetReader):
         return Instance(fields)
 
     @overrides
-    def _read(self, file_path: str) -> Iterator[Instance]:
-        df = pd.read_csv(file_path)
-
+    def _read(self, df) -> Iterator[Instance]:
         if config.testing:
             df = df.head(1000)
 
@@ -88,6 +87,21 @@ class LoadData(DatasetReader):
                 [Token(x) for x in self.tokenizer(row["text"])],
                 row[["label"]].values,
             )
+
+
+def load_data(train_dir, test_dir):
+    token_indexer = ELMoTokenCharactersIndexer()
+    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer})
+
+    train_data = pd.read_csv(train_dir)
+    test_data = pd.read_csv(test_dir)
+    train_data, val_data = train_test_split(train_data, test_size=0.1, random_state=42)
+
+    train_data = reader.read(train_data)
+    val_data = reader.read(val_data)
+    test_data = reader.read(test_data)
+
+    return train_data, val_data, test_data
 
 
 class BaselineModel(Model):
@@ -103,9 +117,7 @@ class BaselineModel(Model):
         embeddings = self.word_embeddings(tokens)
         state = self.encoder(embeddings, mask)
         class_logits = self.projection(state)
-
-        output = {"class_logits": class_logits}
-        output["loss"] = self.loss(class_logits, label)
+        output = {"class_logits": class_logits, "loss": self.loss(class_logits, label)}
 
         return output
 
@@ -140,65 +152,73 @@ def tonp(tsr):
     return tsr.detach().cpu().numpy()
 
 
-def main():
-    options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_options.json'
-    weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_weights.hdf5'
-
-    USE_GPU = torch.cuda.is_available()
-    DATA_ROOT = Path("../..") / "Data"
-    torch.manual_seed(config.seed)
-    label_cols = ["label"]
-    token_indexer = ELMoTokenCharactersIndexer()
-    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer})
-    train_ds, test_ds = (reader.read(DATA_ROOT / fname) for fname in ["binary_train_data.csv", "binary_test_data.csv"])
-
-
-
-    vocab = Vocabulary()
-    iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
-    iterator.index_with(vocab)
-    batch = next(iter(iterator(train_ds)))
-
-    elmo_embedder = ElmoTokenEmbedder(options_file, weight_file)
-    word_embeddings = BasicTextFieldEmbedder({"tokens": elmo_embedder})
-    encoder: Seq2VecEncoder = PytorchSeq2VecWrapper(nn.LSTM(word_embeddings.get_output_dim(), config.hidden_sz, bidirectional=True, batch_first=True))
-    model = BaselineModel(word_embeddings, encoder, vocab)
-
+def train(model, iterator, train_data, val_data, USE_GPU):
     if USE_GPU:
         model.cuda()
     else:
         model
 
-    batch = nn_util.move_to_device(batch, 0 if USE_GPU else -1)
-    tokens = batch["tokens"]
-    labels = batch
-    mask = get_text_field_mask(tokens)
-    embeddings = model.word_embeddings(tokens)
-    state = model.encoder(embeddings, mask)
-    class_logits = model.projection(state)
-    loss = model(**batch)["loss"]
-    loss.backward()
-    [x.grad for x in list(model.encoder.parameters())]
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
         iterator=iterator,
-        train_dataset=train_ds,
+        train_dataset=train_data,
+        validation_dataset=val_data,
         cuda_device=0 if USE_GPU else -1,
         num_epochs=config.epochs
     )
 
-    metrics = trainer.train()
-    # iterate over the dataset without changing its order
+    trainer.train()
+
+
+def evaluate(vocab, model, USE_GPU, test_data):
     seq_iterator = BasicIterator(batch_size=64)
     seq_iterator.index_with(vocab)
 
     predictor = Predictor(model, seq_iterator, cuda_device=0 if USE_GPU else -1)
-    train_preds = predictor.predict(train_ds)
-    test_preds = predictor.predict(test_ds)
+    test_preds = predictor.predict(test_data)
 
-    print(test_preds)
+    test_y = []
+    for i in range(0, len(test_preds)):
+        test_y.append(vars(test_data[i].fields["label"])["array"][0])
+
+    y_pred = (test_preds > 0.5)
+    accuracy = accuracy_score(test_y, y_pred)
+    print("Accuracy: %.2f%%" % (accuracy * 100.0))
+    print(classification_report(test_y, y_pred, target_names=["0", "1"]))
+
+
+def main():
+    # Directory
+    options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_options.json'
+    weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_weights.hdf5'
+
+    base_dir = ".."
+    train_dir = base_dir + "/Data/binary_train_data.csv"
+    test_dir = base_dir + "/Data/binary_test_data.csv"
+
+    USE_GPU = torch.cuda.is_available()
+
+    print("1.Load DATA")
+    train_data, val_data, test_data = load_data(train_dir, test_dir)
+
+    print("2.Pre processing")
+    vocab = Vocabulary()
+    iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
+    iterator.index_with(vocab)
+
+    print("3.Build model")
+    elmo_embedder = ElmoTokenEmbedder(options_file, weight_file)
+    word_embeddings = BasicTextFieldEmbedder({"tokens": elmo_embedder})
+    encoder: Seq2VecEncoder = PytorchSeq2VecWrapper(nn.LSTM(word_embeddings.get_output_dim(), config.hidden_sz, bidirectional=True, batch_first=True))
+    model = BaselineModel(word_embeddings, encoder, vocab)
+
+    print("4.Train")
+    train(model, iterator, train_data, val_data, USE_GPU)
+
+    print("5.Evaluate")
+    evaluate(vocab, model, USE_GPU, test_data)
 
 
 if __name__ == '__main__':
