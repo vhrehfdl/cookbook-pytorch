@@ -83,7 +83,7 @@ class LoadData(DatasetReader):
 
         for i, row in df.iterrows():
             yield self.text_to_instance(
-                [Token(x) for x in self.tokenizer(row["Text"])],
+                [Token(x) for x in self.tokenizer(row["text"])],
                 row[label_cols].values,
             )
 
@@ -139,12 +139,8 @@ def tonp(tsr):
 
 
 
-
-options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_options.json'
-weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_weights.hdf5'
-
 USE_GPU = torch.cuda.is_available()
-DATA_ROOT = Path("../../..") / "Data"
+DATA_ROOT = Path("../") / "Data"
 torch.manual_seed(config.seed)
 label_cols = ["label"]
 from allennlp.data.token_indexers import PretrainedBertIndexer
@@ -162,8 +158,6 @@ batch = next(iter(iterator(train_ds)))
 
 print(batch["tokens"]["tokens"].shape)
 
-# elmo_embedder = ElmoTokenEmbedder(options_file, weight_file)
-# word_embeddings = BasicTextFieldEmbedder({"tokens": elmo_embedder})
 
 from allennlp.modules.token_embedders.bert_token_embedder import PretrainedBertEmbedder
 

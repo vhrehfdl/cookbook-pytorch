@@ -203,21 +203,20 @@ def main():
     print("1.Load DATA")
     train_data, val_data, test_data = load_data(train_dir, test_dir)
 
-    print("2.Pre processing")
+    print("2.Build model")
     vocab = Vocabulary()
     iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
     iterator.index_with(vocab)
 
-    print("3.Build model")
     elmo_embedder = ElmoTokenEmbedder(options_file, weight_file)
     word_embeddings = BasicTextFieldEmbedder({"tokens": elmo_embedder})
     encoder: Seq2VecEncoder = PytorchSeq2VecWrapper(nn.LSTM(word_embeddings.get_output_dim(), config.hidden_sz, bidirectional=True, batch_first=True))
     model = BaselineModel(word_embeddings, encoder, vocab)
 
-    print("4.Train")
+    print("3.Train")
     train(model, iterator, train_data, val_data, USE_GPU)
 
-    print("5.Evaluate")
+    print("4.Evaluate")
     evaluate(vocab, model, USE_GPU, test_data)
 
 
