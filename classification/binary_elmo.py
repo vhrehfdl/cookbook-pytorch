@@ -45,10 +45,10 @@ class Config(dict):
 
 
 config = Config(
-    testing=True,
+    testing=False,
     batch_size=64,
     lr=3e-4,
-    epochs=2,
+    epochs=10,
     hidden_sz=64,
     max_seq_len=300,
     max_vocab_size=100000,
@@ -102,6 +102,19 @@ def load_data(train_dir, test_dir):
     test_data = reader.read(test_data)
 
     return train_data, val_data, test_data
+
+
+def pre_processing(options_file, weight_file):
+    vocab = Vocabulary()
+    iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
+    iterator.index_with(vocab)
+
+    elmo_embedder = ElmoTokenEmbedder(options_file, weight_file)
+    word_embeddings = BasicTextFieldEmbedder({"tokens": elmo_embedder})
+    encoder: Seq2VecEncoder = PytorchSeq2VecWrapper(nn.LSTM(word_embeddings.get_output_dim(), config.hidden_sz, bidirectional=True, batch_first=True))
+    model = BaselineModel(word_embeddings, encoder, vocab)
+
+    return model, iterator, vocab
 
 
 class BaselineModel(Model):
@@ -171,6 +184,8 @@ def train(model, iterator, train_data, val_data, USE_GPU):
 
     trainer.train()
 
+    return model
+
 
 def evaluate(vocab, model, USE_GPU, test_data):
     seq_iterator = BasicIterator(batch_size=64)
@@ -194,27 +209,19 @@ def main():
     options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_options.json'
     weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_weights.hdf5'
 
-    base_dir = ".."
-    train_dir = base_dir + "/Data/binary_train_data.csv"
-    test_dir = base_dir + "/Data/binary_test_data.csv"
+    train_dir = "../Data/binary_train_data.csv"
+    test_dir = "../Data/binary_test_data.csv"
 
     USE_GPU = torch.cuda.is_available()
 
-    print("1.Load DATA")
+    print("1.Load Data")
     train_data, val_data, test_data = load_data(train_dir, test_dir)
 
     print("2.Build model")
-    vocab = Vocabulary()
-    iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
-    iterator.index_with(vocab)
-
-    elmo_embedder = ElmoTokenEmbedder(options_file, weight_file)
-    word_embeddings = BasicTextFieldEmbedder({"tokens": elmo_embedder})
-    encoder: Seq2VecEncoder = PytorchSeq2VecWrapper(nn.LSTM(word_embeddings.get_output_dim(), config.hidden_sz, bidirectional=True, batch_first=True))
-    model = BaselineModel(word_embeddings, encoder, vocab)
+    model, iterator, vocab = pre_processing(options_file, weight_file)
 
     print("3.Train")
-    train(model, iterator, train_data, val_data, USE_GPU)
+    model = train(model, iterator, train_data, val_data, USE_GPU)
 
     print("4.Evaluate")
     evaluate(vocab, model, USE_GPU, test_data)
