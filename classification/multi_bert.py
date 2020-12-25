@@ -222,8 +222,8 @@ def evaluate(vocab, model, test_data):
 
 def main():
     # Directory
-    train_dir = "../Data/train.csv"
-    test_dir = "../Data/test.csv"
+    train_dir = "../Data/multi_train_data.csv.csv"
+    test_dir = "../Data/multi_test_data.csv.csv"
 
     print("1.Load Data")
     train_data, test_data = load_data(train_dir, test_dir)
