@@ -10,28 +10,28 @@ from torchtext.vocab import GloVe
 
 
 def load_data(train_dir, test_dir):
-    NLP = spacy.load('en_core_web_sm')
-    tokenizer = lambda sent: [x.text for x in NLP.tokenizer(sent) if x.text != " "]
+    nlp = spacy.load('en_core_web_sm')
+    tokenizer = lambda sent: [x.text for x in nlp.tokenizer(sent) if x.text != " "]
 
-    TEXT = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
-    LABEL = data.LabelField()
+    text = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
+    label = data.LabelField()
 
-    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('turn1', TEXT), ('turn2', TEXT), ('turn3', TEXT), ('label', LABEL)])
-    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('turn1', TEXT), ('turn2', TEXT), ('turn3', TEXT), ('label', LABEL)])
+    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('turn1', text), ('turn2', text), ('turn3', text), ('label', label)])
+    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('turn1', text), ('turn2', text), ('turn3', text), ('label', label)])
 
     train_data, valid_data = train_data.split(split_ratio=0.1)
 
-    return train_data, valid_data, test_data, TEXT, LABEL
+    return train_data, valid_data, test_data, text, label
 
 
-def pre_processing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
-    TEXT.build_vocab(train_data, vectors=GloVe(name='6B', dim=300))
-    LABEL.build_vocab(train_data)
+def pre_processing(train_data, valid_data, test_data, text, label, device, batch_size):
+    text.build_vocab(train_data, vectors=GloVe(name='6B', dim=300))
+    label.build_vocab(train_data)
 
     train_iter, val_iter = data.BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device, sort_key=lambda x: len(x.turn3), sort_within_batch=False, repeat=False)
     test_iter = data.Iterator(test_data, batch_size=batch_size, device=device, shuffle=False, sort=False, sort_within_batch=False)
 
-    return train_iter, val_iter, test_iter, TEXT, LABEL
+    return train_iter, val_iter, test_iter, text, label
 
 
 class TextCNN(nn.Module):
@@ -62,11 +62,7 @@ class TextCNN(nn.Module):
         )
 
         self.dropout = nn.Dropout(dropout_keep)
-
-        # Fully-Connected Layer
         self.fc = nn.Linear(num_channels * len(kernel_size), n_classes)
-
-        # Softmax non-linearity
         self.softmax = nn.Softmax()
 
     def forward(self, x):
@@ -112,7 +108,6 @@ def evaluate(model, val_iter, device):
 
 
 def save_model(best_val_loss, val_loss, model, model_dir):
-    # 검증 오차가 가장 적은 최적의 모델을 저장
     if not best_val_loss or val_loss < best_val_loss:
         if not os.path.isdir("snapshot"):
             os.makedirs("snapshot")
@@ -120,37 +115,33 @@ def save_model(best_val_loss, val_loss, model, model_dir):
 
 
 def main():
-    # 하이퍼파라미터
+    # Hyper parameter
     batch_size = 64
     lr = 0.001
-    EPOCHS = 3
+    epochs = 3
     embedding_dim = 300
     hidden_dim = 64
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    base_dir = ".."
-    train_dir = base_dir + "/Data/multi_train_data.csv"
-    test_dir = base_dir + "/Data/multi_test_data.csv"
+    train_dir = "../Data/multi_train_data.csv"
+    test_dir = "../Data/multi_test_data.csv"
     model_dir = "snapshot/text_classification.pt"
 
-    print("1. Load data")
-    train_data, valid_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
+    print("1.Load data")
+    train_data, valid_data, test_data, text, label = load_data(train_dir, test_dir)
 
-    print("2. Pre processing")
-    train_iter, val_iter, test_iter, TEXT, LABEL = pre_processing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size)
-    vocab_size = len(TEXT.vocab)
-    n_classes = len(LABEL.vocab)
-    word_embeddings = TEXT.vocab.vectors
+    print("2.Pre processing")
+    train_iter, val_iter, test_iter, text, label = pre_processing(train_data, valid_data, test_data, text, label, device, batch_size)
 
-    print("3. Build model")
-    model = TextCNN(hidden_dim, vocab_size, embedding_dim, n_classes, word_embeddings).to(device)
+    print("3.Build model")
+    model = TextCNN(hidden_dim, len(text.vocab), embedding_dim, len(label.vocab), text.vocab.vectors).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    print("4. Train")
+    print("4.Train")
     best_val_loss = None
-    for e in range(1, EPOCHS + 1):
+    for e in range(1, epochs + 1):
         train(model, optimizer, train_iter, device)
         val_loss, val_accuracy = evaluate(model, val_iter, device)
         print("[Epoch: %d] val loss : %5.2f | val accuracy : %5.2f" % (e, val_loss, val_accuracy))

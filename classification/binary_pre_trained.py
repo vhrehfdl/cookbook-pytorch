@@ -10,29 +10,29 @@ from torchtext.vocab import GloVe
 
 
 def load_data(train_dir, test_dir):
-    NLP = spacy.load('en_core_web_sm')
-    tokenizer = lambda sent: [x.text for x in NLP.tokenizer(sent) if x.text != " "]
+    nlp = spacy.load('en_core_web_sm')
+    tokenizer = lambda sent: [x.text for x in nlp.tokenizer(sent) if x.text != " "]
 
-    TEXT = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
-    LABEL = data.Field(sequential=False, batch_first=True)
+    text = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
+    label = data.LabelField()
 
-    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('Text', TEXT), ('label', LABEL)])
-    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('Text', TEXT), ('label', LABEL)])
+    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
+    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
 
     train_data, valid_data = train_data.split(split_ratio=0.8)
 
-    return train_data, valid_data, test_data, TEXT, LABEL
+    return train_data, valid_data, test_data, text, label
 
 
-def data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
-    TEXT.build_vocab(train_data, vectors=GloVe(name='6B', dim=300))
-    LABEL.build_vocab(train_data)
+def pre_processing(train_data, valid_data, test_data, text, label, device, batch_size):
+    text.build_vocab(train_data, vectors=GloVe(name='6B', dim=300))
+    label.build_vocab(train_data)
 
     train_iter, val_iter = data.BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device,
-                                                      sort_key=lambda x: len(x.text), sort_within_batch=False, repeat=False)
+                                                      sort_key=lambda x: len(x.text), sort_within_batch=False)
     test_iter = data.Iterator(test_data, batch_size=batch_size, device=device, shuffle=False, sort=False, sort_within_batch=False)
 
-    return train_iter, val_iter, test_iter, TEXT, LABEL
+    return train_iter, val_iter, test_iter, text, label
 
 
 class BasicModel(nn.Module):
@@ -80,11 +80,7 @@ class TextCNN(nn.Module):
         )
 
         self.dropout = nn.Dropout(dropout_keep)
-
-        # Fully-Connected Layer
         self.fc = nn.Linear(num_channels * len(kernel_size), n_classes)
-
-        # Softmax non-linearity
         self.softmax = nn.Softmax()
 
     def forward(self, x):
@@ -107,7 +103,6 @@ def train(model, optimizer, train_iter, device):
     model.train()
     for b, batch in enumerate(train_iter):
         x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)  # 레이블 값을 0과 1로 변환
         optimizer.zero_grad()
 
         logit = model(x)
@@ -115,18 +110,20 @@ def train(model, optimizer, train_iter, device):
         loss.backward()
         optimizer.step()
 
+    return model
+
 
 def evaluate(model, val_iter, device):
     model.eval()
     corrects, total_loss = 0, 0
-    print(val_iter)
+
     for batch in val_iter:
         x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)  # 레이블 값을 0과 1로 변환
         logit = model(x)
         loss = F.cross_entropy(logit, y, reduction='sum')
         total_loss += loss.item()
         corrects += (logit.max(1)[1].view(y.size()).data == y.data).sum()
+
     size = len(val_iter.dataset)
     avg_loss = total_loss / size
     avg_accuracy = 100.0 * corrects / size
@@ -134,7 +131,6 @@ def evaluate(model, val_iter, device):
 
 
 def save_model(best_val_loss, val_loss, model, model_dir):
-    # 검증 오차가 가장 적은 최적의 모델을 저장
     if not best_val_loss or val_loss < best_val_loss:
         if not os.path.isdir("snapshot"):
             os.makedirs("snapshot")
@@ -142,10 +138,10 @@ def save_model(best_val_loss, val_loss, model, model_dir):
 
 
 def main():
-    # 하이퍼파라미터
+    # Hyper parameter
     batch_size = 64
     lr = 0.001
-    EPOCHS = 3
+    epochs = 3
     n_classes = 2
     embedding_dim = 300
     hidden_dim = 32
@@ -153,28 +149,25 @@ def main():
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    base_dir = ".."
-    train_dir = base_dir + "/Data/binary_train_data.csv"
-    test_dir = base_dir + "/Data/binary_test_data.csv"
-    model_dir = "snapshot/txtclassification.pt"
+    # Directory
+    train_dir = "../Data/binary_train_data.csv"
+    test_dir = "../Data/binary_test_data.csv"
+    model_dir = "snapshot/text_classification.pt"
 
-    print("1. Load data")
-    train_data, valid_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
+    print("1.Load data")
+    train_data, valid_data, test_data, text, label = load_data(train_dir, test_dir)
 
-    print("2. Pre processing")
-    train_iter, val_iter, test_iter, TEXT, LABEL = data_preprocissing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size)
+    print("2.Pre processing")
+    train_iter, val_iter, test_iter, text, label = pre_processing(train_data, valid_data, test_data, text, label, device, batch_size)
 
-    print("3. Build model")
-    vocab_size = len(TEXT.vocab)
-    word_embeddings = TEXT.vocab.vectors
-
-    model = TextCNN(hidden_dim, vocab_size, embedding_dim, n_classes, word_embeddings).to(device)
+    print("3.Build model")
+    model = TextCNN(hidden_dim, len(text.vocab), embedding_dim, n_classes, text.vocab.vectors).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    print("4. Train")
+    print("4.Train")
     best_val_loss = None
-    for e in range(1, EPOCHS + 1):
-        train(model, optimizer, train_iter, device)
+    for e in range(1, epochs + 1):
+        model = train(model, optimizer, train_iter, device)
         val_loss, val_accuracy = evaluate(model, val_iter, device)
         print("[Epoch: %d] val loss : %5.2f | val accuracy : %5.2f" % (e, val_loss, val_accuracy))
         save_model(best_val_loss, val_loss, model, model_dir)

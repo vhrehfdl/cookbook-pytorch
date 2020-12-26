@@ -10,28 +10,28 @@ from torchtext.data import TabularDataset
 
 
 def load_data(train_dir, test_dir):
-    NLP = spacy.load('en_core_web_sm')
-    tokenizer = lambda sent: [x.text for x in NLP.tokenizer(sent) if x.text != " "]
+    nlp = spacy.load('en_core_web_sm')
+    tokenizer = lambda sent: [x.text for x in nlp.tokenizer(sent) if x.text != " "]
 
-    TEXT = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
-    LABEL = data.Field(sequential=False, batch_first=True)
+    text = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
+    label = data.LabelField()
 
-    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('text', TEXT), ('label', LABEL)])
-    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('text', TEXT), ('label', LABEL)])
+    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
+    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
 
     train_data, valid_data = train_data.split(split_ratio=0.8)
 
-    return train_data, valid_data, test_data, TEXT, LABEL
+    return train_data, valid_data, test_data, text, label
 
 
-def pre_processing(train_data, valid_data, test_data, TEXT, LABEL, device, batch_size):
-    TEXT.build_vocab(train_data)
-    LABEL.build_vocab(train_data)
+def pre_processing(train_data, valid_data, test_data, text, label, device, batch_size):
+    text.build_vocab(train_data)
+    label.build_vocab(train_data)
 
     train_iter, val_iter = data.BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device, sort_key=lambda x: len(x.text), sort_within_batch=False, repeat=False)
     test_iter = data.Iterator(test_data, batch_size=batch_size, device=device, shuffle=False, sort=False, sort_within_batch=False)
 
-    return train_iter, val_iter, test_iter, TEXT, LABEL
+    return train_iter, val_iter, test_iter, text, label
 
 
 class BasicModel(nn.Module):
@@ -54,13 +54,14 @@ def train(model, optimizer, train_iter, device):
     model.train()
     for b, batch in enumerate(train_iter):
         x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)
         optimizer.zero_grad()
 
         logit = model(x)
         loss = F.cross_entropy(logit, y)
         loss.backward()
         optimizer.step()
+
+    return model
 
 
 def evaluate(model, val_iter, device):
@@ -69,7 +70,6 @@ def evaluate(model, val_iter, device):
 
     for batch in val_iter:
         x, y = batch.text.to(device), batch.label.to(device)
-        y.data.sub_(1)
         logit = model(x)
         loss = F.cross_entropy(logit, y, reduction='sum')
         total_loss += loss.item()
@@ -85,28 +85,25 @@ def save_model(best_val_loss, val_loss, model, model_dir):
         if not os.path.isdir("snapshot"):
             os.makedirs("snapshot")
         torch.save(model.state_dict(), model_dir)
-        best_val_loss = val_loss
 
 
 def main():
-
     # Hyper parameter
     batch_size = 64
     lr = 0.001
-    EPOCHS = 10
-    n_classes = 2
+    epochs = 3
+    n_classes = 2   # 클래스 개수
     embedding_dim = 300
     hidden_dim = 32
 
     # Directory
-    base_dir = ".."
-    train_dir = base_dir + "/Data/binary_train_data.csv"
-    test_dir = base_dir + "/Data/binary_test_data.csv"
+    train_dir = "../Data/binary_train_data.csv"
+    test_dir = "../Data/binary_test_data.csv"
     model_dir = "snapshot/text_classification.pt"
 
-    wandb.init(project="pytorch_cookbook", config={"dataset": "quora insurance", "type": "baseline"});
+    wandb.init(project="pytorch_cookbook", config={"dataset": "IMDB sentiment", "type": "baseline"})
 
-    wandb.config.epochs = EPOCHS
+    wandb.config.epochs = epochs
     wandb.config.batch_size = batch_size
     wandb.config.learning_rate = lr
     wandb.config.embedding_dim = embedding_dim
@@ -114,26 +111,25 @@ def main():
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    print("1. Load data")
-    train_data, val_data, test_data, TEXT, LABEL = load_data(train_dir, test_dir)
+    print("1.Load data")
+    train_data, val_data, test_data, text, label = load_data(train_dir, test_dir)
 
-    print("2. Pre processing")
-    train_iter, val_iter, test_iter, TEXT, LABEL = pre_processing(train_data, val_data, test_data, TEXT, LABEL, device, batch_size)
+    print("2.Pre processing")
+    train_iter, val_iter, test_iter, text, label = pre_processing(train_data, val_data, test_data, text, label, device, batch_size)
 
-    vocab_size = len(TEXT.vocab)
-
-    print("3. Build model")
-    model = BasicModel(1, hidden_dim, vocab_size, embedding_dim, n_classes).to(device)
+    print("3.Build model")
+    model = BasicModel(1, hidden_dim, len(text.vocab), embedding_dim, n_classes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     wandb.watch(model)
 
-    print("4. Train")
+    print("4.Train")
     best_val_loss = None
-    for e in range(1, EPOCHS + 1):
-        train(model, optimizer, train_iter, device)
+    for e in range(1, epochs + 1):
+        model = train(model, optimizer, train_iter, device)
         val_loss, val_accuracy = evaluate(model, val_iter, device)
         print("[Epoch: %d] val loss : %5.2f | val accuracy : %5.2f" % (e, val_loss, val_accuracy))
         save_model(best_val_loss, val_loss, model, model_dir)
+
         wandb.log({
             "epoch": e,
             "val_accuracy": val_accuracy,
@@ -143,7 +139,6 @@ def main():
     model.load_state_dict(torch.load(model_dir))
     test_loss, test_acc = evaluate(model, test_iter, device)
     print('테스트 오차: %5.2f | 테스트 정확도: %5.2f' % (test_loss, test_acc))
-
 
 
 if __name__ == '__main__':

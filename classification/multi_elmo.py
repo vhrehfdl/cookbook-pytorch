@@ -36,6 +36,7 @@ from tqdm import tqdm
 class Config(dict):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.col_name = None
         self.use_gpu = None
         self.target_names = None
         self.label_cols = None
@@ -59,8 +60,9 @@ config = Config(
     hidden_size=64,
     max_seq_len=100,
     use_gpu=torch.cuda.is_available(),
+    col_name=["turn3", "label"],
     label_cols=["happy", "angry", "sad", "others"],
-    target_names=["0", "1", "2", "3"]
+    target_names=["0", "1", "2", "3"],
 )
 
 
@@ -80,7 +82,7 @@ class LoadData(DatasetReader):
         sentence_field = TextField(tokens, self.token_indexers)
         fields = {"tokens": sentence_field}
 
-        labels = np.array([1 if x == config.label_cols.index(labels) else 0 for x in range(0, 4)])
+        labels = np.array([1 if x == config.label_cols.index(labels) else 0 for x in range(0, len(config.label_cols))])
         label_field = ArrayField(array=labels)
         fields["label"] = label_field
 
@@ -145,7 +147,7 @@ def tonp(tsr):
 
 def load_data(train_dir, test_dir):
     token_indexer = ELMoTokenCharactersIndexer()
-    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer}, col_name=["turn3", "label"])
+    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer}, col_name=config.col_name)
 
     train_data = pd.read_csv(train_dir)
     test_data = pd.read_csv(test_dir)
@@ -161,7 +163,7 @@ def load_data(train_dir, test_dir):
     return train_data, val_data, test_data, test_y
 
 
-def pre_processing(options_file, weight_file):
+def build_model(options_file, weight_file):
     vocab = Vocabulary()
     iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
     iterator.index_with(vocab)
@@ -219,8 +221,8 @@ def main():
     print("1.Load Data")
     train_data, val_data, test_data, test_y = load_data(train_dir, test_dir)
 
-    print("2.Pre processing & Build model")
-    model, iterator, vocab = pre_processing(options_file, weight_file)
+    print("2.Build model")
+    model, iterator, vocab = build_model(options_file, weight_file)
 
     print("3.Train")
     model = train(model, iterator, train_data, val_data)

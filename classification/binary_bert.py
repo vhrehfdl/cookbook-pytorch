@@ -35,6 +35,13 @@ from tqdm import tqdm
 class Config(dict):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.col_name = None
+        self.batch_size = None
+        self.hidden_size = None
+        self.epochs = None
+        self.use_gpu = None
+        self.lr = None
+        self.max_seq_len = None
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -44,33 +51,31 @@ class Config(dict):
 
 
 config = Config(
-    testing=True,
-    seed=1,
     batch_size=64,
     lr=3e-4,
-    epochs=3,
-    hidden_sz=64,
-    max_seq_len=300,  # necessary to limit memory usage
-    max_vocab_size=100000,
+    epochs=2,
+    hidden_size=64,
+    max_seq_len=300,
+    use_gpu=torch.cuda.is_available(),
+    col_name=["text", "label"]
 )
 
 
 class LoadData(DatasetReader):
     def __init__(self, tokenizer: Callable[[str], List[str]] = lambda x: x.split(),
                  token_indexers: Dict[str, TokenIndexer] = None,
-                 max_seq_len: Optional[int] = config.max_seq_len) -> None:
+                 max_seq_len: Optional[int] = config.max_seq_len,
+                 col_name: List[str] = None) -> None:
         super().__init__(lazy=False)
         self.tokenizer = tokenizer
         self.token_indexers = token_indexers
         self.max_seq_len = max_seq_len
+        self.col_name = col_name
 
     @overrides
     def text_to_instance(self, tokens: List[Token], labels: np.ndarray = None) -> Instance:
         sentence_field = TextField(tokens, self.token_indexers)
         fields = {"tokens": sentence_field}
-
-        if labels is None:
-            labels = np.zeros(len(["label"]))
 
         label_field = ArrayField(array=labels)
         fields["label"] = label_field
@@ -79,34 +84,11 @@ class LoadData(DatasetReader):
 
     @overrides
     def _read(self, df) -> Iterator[Instance]:
-        if config.testing:
-            df = df.head(1000)
-
         for i, row in df.iterrows():
             yield self.text_to_instance(
-                [Token(x) for x in self.tokenizer(row["text"])],
-                row[["label"]].values,
+                [Token(x) for x in self.tokenizer(row[self.col_name[0]])],
+                row[[self.col_name[1]]].values,
             )
-
-
-def load_data(train_dir, test_dir):
-    token_indexer = PretrainedBertIndexer(
-        pretrained_model="bert-base-uncased",
-        max_pieces=config.max_seq_len,
-        do_lowercase=True,
-     )
-
-    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer})
-
-    train_data = pd.read_csv(train_dir)
-    test_data = pd.read_csv(test_dir)
-    train_data, val_data = train_test_split(train_data, test_size=0.1, random_state=42)
-
-    train_data = reader.read(train_data)
-    val_data = reader.read(val_data)
-    test_data = reader.read(test_data)
-
-    return train_data, test_data
 
 
 class BaselineModel(Model):
@@ -122,9 +104,7 @@ class BaselineModel(Model):
         embeddings = self.word_embeddings(tokens)
         state = self.encoder(embeddings, mask)
         class_logits = self.projection(state)
-
-        output = {"class_logits": class_logits}
-        output["loss"] = self.loss(class_logits, label)
+        output = {"class_logits": class_logits, "loss": self.loss(class_logits, label)}
 
         return output
 
@@ -159,6 +139,29 @@ def tonp(tsr):
     return tsr.detach().cpu().numpy()
 
 
+def load_data(train_dir, test_dir):
+    token_indexer = PretrainedBertIndexer(
+        pretrained_model="bert-base-uncased",
+        max_pieces=config.max_seq_len,
+        do_lowercase=True,
+     )
+
+    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer}, col_name=config.col_name)
+
+    train_data = pd.read_csv(train_dir)
+    test_data = pd.read_csv(test_dir)
+
+    test_y = test_data[config.col_name[1]].tolist()
+
+    train_data, val_data = train_test_split(train_data, test_size=0.1, random_state=42)
+
+    train_data = reader.read(train_data)
+    val_data = reader.read(val_data)
+    test_data = reader.read(test_data)
+
+    return train_data, val_data, test_data, test_y
+
+
 def pre_processing(train_data):
     vocab = Vocabulary()
     iterator = BucketIterator(batch_size=config.batch_size, sorting_keys=[("tokens", "num_tokens")])
@@ -167,17 +170,15 @@ def pre_processing(train_data):
 
     bert_embedder = PretrainedBertEmbedder(pretrained_model="bert-base-uncased", top_layer_only=True)
     word_embeddings: TextFieldEmbedder = BasicTextFieldEmbedder({"tokens": bert_embedder}, allow_unmatched_keys=True)
-    BERT_DIM = word_embeddings.get_output_dim()
+    bert_dim = word_embeddings.get_output_dim()
 
     class BertSentencePooler(Seq2VecEncoder):
-        def forward(self, embs: torch.tensor,
-                    mask: torch.tensor = None) -> torch.tensor:
-            # extract first token tensor
+        def forward(self, embs: torch.tensor, mask: torch.tensor = None) -> torch.tensor:
             return embs[:, 0]
 
         @overrides
         def get_output_dim(self) -> int:
-            return BERT_DIM
+            return bert_dim
 
     encoder = BertSentencePooler(vocab)
     model = BaselineModel(word_embeddings, encoder, vocab)
@@ -185,13 +186,11 @@ def pre_processing(train_data):
     return model, batch, vocab, iterator
 
 
-def train(model, batch, USE_GPU, iterator, train_data):
-    if USE_GPU:
+def train(model, batch, iterator, train_data):
+    if config.use_gpu:
         model.cuda()
-    else:
-        model
 
-    batch = nn_util.move_to_device(batch, 0 if USE_GPU else -1)
+    batch = nn_util.move_to_device(batch, 0 if config.use_gpu else -1)
     loss = model(**batch)["loss"]
     loss.backward()
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
@@ -200,7 +199,7 @@ def train(model, batch, USE_GPU, iterator, train_data):
         optimizer=optimizer,
         iterator=iterator,
         train_dataset=train_data,
-        cuda_device=0 if USE_GPU else -1,
+        cuda_device=0 if config.use_gpu else -1,
         num_epochs=config.epochs
     )
 
@@ -209,16 +208,12 @@ def train(model, batch, USE_GPU, iterator, train_data):
     return model
 
 
-def evaluate(vocab, model, USE_GPU, test_data):
+def evaluate(vocab, model, test_data, test_y):
     seq_iterator = BasicIterator(batch_size=64)
     seq_iterator.index_with(vocab)
 
-    predictor = Predictor(model, seq_iterator, cuda_device=0 if USE_GPU else -1)
+    predictor = Predictor(model, seq_iterator, cuda_device=0 if config.use_gpu else -1)
     test_preds = predictor.predict(test_data)
-
-    test_y = []
-    for i in range(0, len(test_preds)):
-        test_y.append(vars(test_data[i].fields["label"])["array"][0])
 
     y_pred = (test_preds > 0.5)
     accuracy = accuracy_score(test_y, y_pred)
@@ -228,22 +223,20 @@ def evaluate(vocab, model, USE_GPU, test_data):
 
 def main():
     # Directory
-    train_dir = "../Data/train.csv"
-    test_dir = "../Data/test.csv"
-
-    USE_GPU = torch.cuda.is_available()
+    train_dir = "../Data/binary_train_data.csv"
+    test_dir = "../Data/binary_test_data.csv"
 
     print("1.Load Data")
-    train_data, test_data = load_data(train_dir, test_dir)
+    train_data, val_data, test_data, test_y = load_data(train_dir, test_dir)
 
     print("2.Build model")
     model, batch, vocab, iterator = pre_processing(train_data)
 
     print("3.Train")
-    model = train(model, batch, USE_GPU, iterator, train_data)
+    model = train(model, batch, iterator, train_data)
 
     print("4.Evaluate")
-    evaluate(vocab, model, USE_GPU, test_data)
+    evaluate(vocab, model, test_data, test_y)
 
 
 if __name__ == '__main__':

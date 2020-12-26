@@ -35,14 +35,15 @@ from tqdm import tqdm
 class Config(dict):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.use_gpu = None
-        self.target_names = None
         self.label_cols = None
-        self.epochs = None
-        self.lr = None
+        self.target_names = None
+        self.col_name = None
         self.batch_size = None
-        self.max_seq_len = None
         self.hidden_size = None
+        self.epochs = None
+        self.use_gpu = None
+        self.lr = None
+        self.max_seq_len = None
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -54,27 +55,33 @@ class Config(dict):
 config = Config(
     batch_size=64,
     lr=3e-4,
-    epochs=3,
+    epochs=1,
     hidden_size=64,
-    max_seq_len=100,
+    max_seq_len=300,
     use_gpu=torch.cuda.is_available(),
+    col_name=["turn3", "label"],
+    label_cols=["happy", "angry", "sad", "others"],
+    target_names=["0", "1", "2", "3"],
 )
 
 
 class LoadData(DatasetReader):
     def __init__(self, tokenizer: Callable[[str], List[str]] = lambda x: x.split(),
                  token_indexers: Dict[str, TokenIndexer] = None,
-                 max_seq_len: Optional[int] = config.max_seq_len) -> None:
+                 max_seq_len: Optional[int] = config.max_seq_len,
+                 col_name: List[str] = None) -> None:
         super().__init__(lazy=False)
         self.tokenizer = tokenizer
         self.token_indexers = token_indexers
         self.max_seq_len = max_seq_len
+        self.col_name = col_name
 
     @overrides
     def text_to_instance(self, tokens: List[Token], labels: np.ndarray = None) -> Instance:
         sentence_field = TextField(tokens, self.token_indexers)
         fields = {"tokens": sentence_field}
 
+        labels = np.array([1 if x == config.label_cols.index(labels) else 0 for x in range(0, len(config.label_cols))])
         label_field = ArrayField(array=labels)
         fields["label"] = label_field
 
@@ -84,8 +91,8 @@ class LoadData(DatasetReader):
     def _read(self, df) -> Iterator[Instance]:
         for i, row in df.iterrows():
             yield self.text_to_instance(
-                [Token(x) for x in self.tokenizer(row["text"])],
-                row[["label"]].values,
+                [Token(x) for x in self.tokenizer(row[self.col_name[0]])],
+                row[[self.col_name[1]]].values,
             )
 
 
@@ -94,7 +101,7 @@ class BaselineModel(Model):
         super().__init__(vocab)
         self.word_embeddings = word_embeddings
         self.encoder = encoder
-        self.projection = nn.Linear(self.encoder.get_output_dim(), 1)
+        self.projection = nn.Linear(self.encoder.get_output_dim(), len(config.label_cols))
         self.loss = nn.BCEWithLogitsLoss()
 
     def forward(self, tokens: Dict[str, torch.Tensor], label: torch.Tensor) -> torch.Tensor:
@@ -144,17 +151,20 @@ def load_data(train_dir, test_dir):
         do_lowercase=True,
      )
 
-    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer})
+    reader = LoadData(tokenizer=tokenizer, token_indexers={"tokens": token_indexer}, col_name=config.col_name)
 
     train_data = pd.read_csv(train_dir)
     test_data = pd.read_csv(test_dir)
+
+    test_y = test_data[config.col_name[1]].tolist()
+
     train_data, val_data = train_test_split(train_data, test_size=0.1, random_state=42)
 
     train_data = reader.read(train_data)
     val_data = reader.read(val_data)
     test_data = reader.read(test_data)
 
-    return train_data, test_data
+    return train_data, val_data, test_data, test_y
 
 
 def pre_processing(train_data):
@@ -165,7 +175,7 @@ def pre_processing(train_data):
 
     bert_embedder = PretrainedBertEmbedder(pretrained_model="bert-base-uncased", top_layer_only=True)
     word_embeddings: TextFieldEmbedder = BasicTextFieldEmbedder({"tokens": bert_embedder}, allow_unmatched_keys=True)
-    BERT_DIM = word_embeddings.get_output_dim()
+    bert_dim = word_embeddings.get_output_dim()
 
     class BertSentencePooler(Seq2VecEncoder):
         def forward(self, embs: torch.tensor, mask: torch.tensor = None) -> torch.tensor:
@@ -173,7 +183,7 @@ def pre_processing(train_data):
 
         @overrides
         def get_output_dim(self) -> int:
-            return BERT_DIM
+            return bert_dim
 
     encoder = BertSentencePooler(vocab)
     model = BaselineModel(word_embeddings, encoder, vocab)
@@ -203,30 +213,27 @@ def train(model, batch, iterator, train_data):
     return model
 
 
-def evaluate(vocab, model, test_data):
+def evaluate(vocab, model, test_data, test_y):
     seq_iterator = BasicIterator(batch_size=64)
     seq_iterator.index_with(vocab)
 
     predictor = Predictor(model, seq_iterator, cuda_device=0 if config.use_gpu else -1)
     test_preds = predictor.predict(test_data)
 
-    test_y = []
-    for i in range(0, len(test_preds)):
-        test_y.append(vars(test_data[i].fields["label"])["array"][0])
+    test_y = [config.label_cols.index(x) for x in test_y]
+    y_pred = list(test_preds.argmax(axis=-1))
 
-    y_pred = (test_preds > 0.5)
-    accuracy = accuracy_score(test_y, y_pred)
-    print("Accuracy: %.2f%%" % (accuracy * 100.0))
-    print(classification_report(test_y, y_pred, target_names=["0", "1"]))
+    print("Accuracy: %.2f%%" % (accuracy_score(test_y, y_pred) * 100.0))
+    print(classification_report(test_y, y_pred, target_names=config.target_names))
 
 
 def main():
     # Directory
-    train_dir = "../Data/multi_train_data.csv.csv"
-    test_dir = "../Data/multi_test_data.csv.csv"
+    train_dir = "../Data/multi_train_data.csv"
+    test_dir = "../Data/multi_test_data.csv"
 
     print("1.Load Data")
-    train_data, test_data = load_data(train_dir, test_dir)
+    train_data, val_data, test_data, test_y = load_data(train_dir, test_dir)
 
     print("2.Build model")
     model, batch, vocab, iterator = pre_processing(train_data)
@@ -235,7 +242,7 @@ def main():
     model = train(model, batch, iterator, train_data)
 
     print("4.Evaluate")
-    evaluate(vocab, model, test_data)
+    evaluate(vocab, model, test_data, test_y)
 
 
 if __name__ == '__main__':
