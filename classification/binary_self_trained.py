@@ -97,8 +97,8 @@ def main():
     hidden_dim = 32
 
     # Directory
-    train_dir = "../Data/binary_train_data.csv"
-    test_dir = "../Data/binary_test_data.csv"
+    train_dir = "../data/binary_train_data.csv"
+    test_dir = "../data/binary_test_data.csv"
     model_dir = "snapshot/text_classification.pt"
 
     wandb.init(project="pytorch_cookbook", config={"dataset": "IMDB sentiment", "type": "baseline"})

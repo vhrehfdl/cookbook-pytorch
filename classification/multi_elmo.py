@@ -215,8 +215,8 @@ def main():
     options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_options.json'
     weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_weights.hdf5'
 
-    train_dir = "../Data/multi_train_data.csv"
-    test_dir = "../Data/multi_test_data.csv"
+    train_dir = "../data/multi_train_data.csv"
+    test_dir = "../data/multi_test_data.csv"
 
     print("1.Load Data")
     train_data, val_data, test_data, test_y = load_data(train_dir, test_dir)

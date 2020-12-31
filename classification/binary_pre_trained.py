@@ -150,8 +150,8 @@ def main():
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # Directory
-    train_dir = "../Data/binary_train_data.csv"
-    test_dir = "../Data/binary_test_data.csv"
+    train_dir = "../data/binary_train_data.csv"
+    test_dir = "../data/binary_test_data.csv"
     model_dir = "snapshot/text_classification.pt"
 
     print("1.Load data")

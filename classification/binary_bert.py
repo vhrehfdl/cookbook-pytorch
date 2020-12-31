@@ -223,8 +223,8 @@ def evaluate(vocab, model, test_data, test_y):
 
 def main():
     # Directory
-    train_dir = "../Data/binary_train_data.csv"
-    test_dir = "../Data/binary_test_data.csv"
+    train_dir = "../data/binary_train_data.csv"
+    test_dir = "../data/binary_test_data.csv"
 
     print("1.Load Data")
     train_data, val_data, test_data, test_y = load_data(train_dir, test_dir)
