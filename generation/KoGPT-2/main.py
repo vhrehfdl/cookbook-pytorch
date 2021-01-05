@@ -85,8 +85,7 @@ def main(epoch, save_path, load_path, samples, data_file_path, batch_size):
 
 	# download vocab
 	vocab_info = tokenizer
-	vocab_path = download(vocab_info['url'], vocab_info['fname'], vocab_info['chksum'],
-						   cachedir=cachedir)
+	vocab_path = download(vocab_info['url'], vocab_info['fname'], vocab_info['chksum'], cachedir=cachedir)
 
 	# KoGPT-2 언어 모델 학습을 위한 GPT2LMHeadModel 선언
 	kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_config))

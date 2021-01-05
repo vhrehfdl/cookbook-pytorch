@@ -44,12 +44,14 @@ kogpt2_config = {
 	"vocab_size": 50000
 }
 
+
 def auto_enter(text):
 	text = (text.replace("   ", "\n"))
 	text = text.split("\n")
 
 	text = [t.lstrip() for t in text if t != '']
 	return "\n\n".join(text)
+
 
 def main(temperature = 0.7, top_p = 0.8, top_k = 40, tmp_sent = "", text_size = 100, loops = 0, load_path = ""):
 	ctx = 'cuda'
@@ -147,6 +149,7 @@ def main(temperature = 0.7, top_p = 0.8, top_k = 40, tmp_sent = "", text_size = 
 			if num >= loops:
 				print("good")
 				return
+
 
 if __name__ == "__main__":
 	# execute only if run as a script
