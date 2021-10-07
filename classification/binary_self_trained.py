@@ -1,27 +1,25 @@
 import os
 
-import spacy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 from torchtext import data
 from torchtext.data import TabularDataset
+from torchtext.data.utils import get_tokenizer
 
 
 def load_data(train_dir, test_dir):
-    nlp = spacy.load('en_core_web_sm')
-    tokenizer = lambda sent: [x.text for x in nlp.tokenizer(sent) if x.text != " "]
+    tokenizer = get_tokenizer('basic_english')
 
     text = data.Field(sequential=True, batch_first=True, lower=True, fix_length=50, tokenize=tokenizer)
     label = data.LabelField()
 
-    train_data = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
-    test_data = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
+    train = TabularDataset(path=train_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
+    test = TabularDataset(path=test_dir, skip_header=True, format='csv', fields=[('text', text), ('label', label)])
 
-    train_data, valid_data = train_data.split(split_ratio=0.8)
+    train, valid = train.split(split_ratio=0.8)
 
-    return train_data, valid_data, test_data, text, label
+    return train, valid, test, text, label
 
 
 def pre_processing(train_data, valid_data, test_data, text, label, device, batch_size):
@@ -97,16 +95,9 @@ def main():
     hidden_dim = 32
 
     # Directory
-    train_dir = "../data/binary_train_data.csv"
-    test_dir = "../data/binary_test_data.csv"
-    model_dir = "snapshot/text_classification.pt"
-
-    wandb.init(project="pytorch_cookbook", config={"dataset": "IMDB sentiment", "type": "baseline"})
-
-    wandb.config.epochs = epochs
-    wandb.config.batch_size = batch_size
-    wandb.config.learning_rate = lr
-    wandb.config.embedding_dim = embedding_dim
+    train_dir = "../data/binary_train.csv"
+    test_dir = "../data/binary_test.csv"
+    model_dir = "./model_save/text_classification.pt"
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
@@ -120,8 +111,7 @@ def main():
     print("3.Build model")
     model = BasicModel(1, hidden_dim, len(text.vocab), embedding_dim, n_classes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    wandb.watch(model)
-
+    
     print("4.Train")
     best_val_loss = None
     for e in range(1, epochs + 1):
@@ -129,12 +119,6 @@ def main():
         val_loss, val_accuracy = evaluate(model, val_iter, device)
         print("[Epoch: %d] val loss : %5.2f | val accuracy : %5.2f" % (e, val_loss, val_accuracy))
         save_model(best_val_loss, val_loss, model, model_dir)
-
-        wandb.log({
-            "epoch": e,
-            "val_accuracy": val_accuracy,
-            "val_loss": val_loss
-        })
 
     model.load_state_dict(torch.load(model_dir))
     test_loss, test_acc = evaluate(model, test_iter, device)
