@@ -7,11 +7,12 @@ import gluonnlp as nlp
 import numpy as np
 from tqdm import tqdm, tqdm_notebook
 
-from kobert.utils import get_tokenizer
-from kobert.pytorch_kobert import get_pytorch_kobert_model
+from KoBERT.kobert.utils import get_tokenizer
+from KoBERT.kobert.pytorch_kobert import get_pytorch_kobert_model
 
 from transformers import AdamW
 from transformers.optimization import get_cosine_schedule_with_warmup
+
 
 ##GPU 사용 시
 device = torch.device("cuda:0")
@@ -19,8 +20,25 @@ device = torch.device("cuda:0")
 bertmodel, vocab = get_pytorch_kobert_model()
 
 
-dataset_train = nlp.data.TSVDataset("ratings_train.txt?dl=1", field_indices=[1,2], num_discard_samples=1)
-dataset_test = nlp.data.TSVDataset("ratings_test.txt?dl=1", field_indices=[1,2], num_discard_samples=1)
+import csv
+
+with open('../data/ko_binary_train.csv','r') as csvin, open('../data/ko_binary_train.txt', 'w') as tsvout:
+    csvin = csv.reader(csvin)
+    tsvout = csv.writer(tsvout, delimiter='\t')
+
+    for row in csvin:
+        tsvout.writerow(row)
+
+with open('../data/ko_binary_test.csv','r') as csvin, open('../data/ko_binary_test.txt', 'w') as tsvout:
+    csvin = csv.reader(csvin)
+    tsvout = csv.writer(tsvout, delimiter='\t')
+
+    for row in csvin:
+        tsvout.writerow(row)
+
+dataset_train = nlp.data.TSVDataset("../data/ko_binary_train.txt", field_indices=[0,1], num_discard_samples=1)
+dataset_test = nlp.data.TSVDataset("../data/ko_binary_train.txt", field_indices=[0,1], num_discard_samples=1)
+
 
 tokenizer = get_tokenizer()
 tok = nlp.data.BERTSPTokenizer(tokenizer, vocab, lower=False)
