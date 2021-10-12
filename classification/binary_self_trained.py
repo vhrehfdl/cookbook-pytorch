@@ -1,11 +1,12 @@
-import os
-
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torchtext import data
 from torchtext.data import TabularDataset
 from torchtext.data.utils import get_tokenizer
+
+from models.base_model import BaseModel
+from utils.evaluation import Evaluation
+from utils import save_model
 
 
 def load_data(train_dir, test_dir):
@@ -32,22 +33,6 @@ def pre_processing(train_data, valid_data, test_data, text, label, device, batch
     return train_iter, val_iter, test_iter, text, label
 
 
-class BasicModel(nn.Module):
-    def __init__(self, n_layers, hidden_dim, n_vocab, embed_dim, n_classes, dropout_p=0.2):
-        super(BasicModel, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.embed = nn.Embedding(n_vocab, embed_dim)
-        self.fcnn = nn.Linear(embed_dim * 50, self.hidden_dim)
-        self.out = nn.Linear(self.hidden_dim, n_classes)
-
-    def forward(self, x):
-        x = self.embed(x)
-        x = x.view(x.size(0), -1)
-        x = self.fcnn(x)
-        logit = self.out(x)
-        return logit
-
-
 def train(model, optimizer, train_iter, device):
     model.train()
     for b, batch in enumerate(train_iter):
@@ -62,37 +47,12 @@ def train(model, optimizer, train_iter, device):
     return model
 
 
-def evaluate(model, val_iter, device):
-    model.eval()
-    corrects, total_loss = 0, 0
-
-    for batch in val_iter:
-        x, y = batch.text.to(device), batch.label.to(device)
-        logit = model(x)
-        loss = F.cross_entropy(logit, y, reduction='sum')
-        total_loss += loss.item()
-        corrects += (logit.max(1)[1].view(y.size()).data == y.data).sum()
-    size = len(val_iter.dataset)
-    avg_loss = total_loss / size
-    avg_accuracy = 100.0 * corrects / size
-    return avg_loss, avg_accuracy
-
-
-def save_model(best_val_loss, val_loss, model, model_dir):
-    if not best_val_loss or val_loss < best_val_loss:
-        if not os.path.isdir("snapshot"):
-            os.makedirs("snapshot")
-        torch.save(model.state_dict(), model_dir)
-
-
 def main():
     # Hyper parameter
     batch_size = 64
     lr = 0.001
     epochs = 3
-    n_classes = 2   # 클래스 개수
-    embedding_dim = 300
-    hidden_dim = 32
+
 
     # Directory
     train_dir = "../data/binary_train.csv"
@@ -104,24 +64,30 @@ def main():
 
     print("1.Load data")
     train_data, val_data, test_data, text, label = load_data(train_dir, test_dir)
-
+    print(label)
+    
     print("2.Pre processing")
     train_iter, val_iter, test_iter, text, label = pre_processing(train_data, val_data, test_data, text, label, device, batch_size)
 
     print("3.Build model")
-    model = BasicModel(1, hidden_dim, len(text.vocab), embedding_dim, n_classes).to(device)
+    model = BaseModel(
+        hidden_dim=32, 
+        vocab_num = len(text.vocab), 
+        embedding_dim=300, 
+        class_num=len(vars(label.vocab)["itos"])
+    ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     
     print("4.Train")
     best_val_loss = None
     for e in range(1, epochs + 1):
         model = train(model, optimizer, train_iter, device)
-        val_loss, val_accuracy = evaluate(model, val_iter, device)
+        val_loss, val_accuracy = Evaluation(model, val_iter, device).eval_classification()
         print("[Epoch: %d] val loss : %5.2f | val accuracy : %5.2f" % (e, val_loss, val_accuracy))
         save_model(best_val_loss, val_loss, model, model_dir)
 
     model.load_state_dict(torch.load(model_dir))
-    test_loss, test_acc = evaluate(model, test_iter, device)
+    test_loss, test_acc = Evaluation(model, test_iter, device).eval_classification()
     print('테스트 오차: %5.2f | 테스트 정확도: %5.2f' % (test_loss, test_acc))
 
 
